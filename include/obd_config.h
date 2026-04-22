@@ -18,6 +18,25 @@ inline constexpr uint32_t kDataStaleTimeoutMs = 5000;
 inline constexpr uint32_t kReconnectDelayMs = 2500;
 inline constexpr uint32_t kReconnectWarmupMs = 3000;
 inline constexpr float kEgtRedThresholdC = 550.0f;
+inline constexpr uint8_t kScreenBrightnessPercent = 60;  // 0..100
+inline constexpr bool kScrollEnabled = true;
+inline constexpr uint8_t kScrollTextSize = 2;      // Larger text for matrix readability.
+inline constexpr uint8_t kScrollStepPx = 1;        // Pixels moved each scroll tick.
+inline constexpr uint32_t kScrollIntervalMs = 70;  // Lower = faster movement.
+inline constexpr uint8_t kScrollGapPx = 10;        // Gap before text restarts.
+
+// Data-display sleep mode:
+// - Keep status color always active
+// - Hide scrolling metric text after timeout
+// - Button A wakes text display again for a limited window
+inline constexpr bool kDataDisplaySleepEnabled = true;
+inline constexpr uint32_t kDataDisplayBootOnMs = 180000;       // 3 minutes
+inline constexpr uint32_t kDataDisplayWakeOnButtonMs = 300000;  // 5 minutes
+
+// High-contrast traffic-light colors (RGB565) for easier distinction.
+inline constexpr uint16_t kColorHealthy = 0x07E0;  // Bright green
+inline constexpr uint16_t kColorWarning = 0xFFE0;  // Bright yellow
+inline constexpr uint16_t kColorAlert = 0xF800;    // Bright red
 
 struct MetricDefinition {
   const char* key;
@@ -30,30 +49,30 @@ struct MetricDefinition {
 // TODO_FILL_ME: replace placeholders with real OBD commands and formulas.
 inline constexpr MetricDefinition kDpfSoot{
     "dpf_soot",
-    "TODO_FILL_ME_CMD_DPF_SOOT",
-    "mg",
-    "TODO_FILL_ME formula example: ((A*256)+B)/10.0",
+    "22042C",
+    "g", 
+    "((A*256)+B)/100.0",
     2};
 
 inline constexpr MetricDefinition kDistanceSinceRegen{
     "distance_since_regen",
-    "TODO_FILL_ME_CMD_DISTANCE_REGEN",
+    "2204F5",
     "km",
-    "TODO_FILL_ME formula example: ((A*256)+B)",
+    "((A*256)+B)",
     2};
 
 inline constexpr MetricDefinition kRegenCounter{
     "regen_counter",
-    "TODO_FILL_ME_CMD_REGEN_COUNTER",
-    "",
-    "TODO_FILL_ME formula example: A",
+    "220421",
+    "status",
+    "A",
     1};
 
 inline constexpr MetricDefinition kEgt{
     "egt",
-    "TODO_FILL_ME_CMD_EGT",
+    "2203E0",
     "C",
-    "TODO_FILL_ME formula example: ((A*256)+B)/10.0 - 40",
+    "((A*256)+B)/10.0 - 40",
     2};
 
 }  // namespace obd_config

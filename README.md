@@ -12,6 +12,16 @@ The LCD UI shows connection state, DPF regen state, stale data warnings, and met
 - License: MIT (`LICENSE`)
 - Contribution guide: `CONTRIBUTING.md`
 
+## DISCLAIMER: USE AT YOUR OWN RISK
+
+This project is provided "as is", without warranty of any kind, express or implied. The author(s) shall not be held liable for any damages, including but not limited to:
+
+- Damage to your vehicle's electronics, ECU, or engine.
+- Voiding of vehicle warranties.
+- Traffic accidents or legal issues resulting from the use of this device while driving.
+
+Important: This is a DIY project. Connecting unauthorized hardware to your vehicle's OBD-II port can be dangerous. Always prioritize road safety and do not operate the device while driving.
+
 ## 1) Features
 
 - BLE OBD connection with reconnect handling
@@ -133,6 +143,18 @@ Notes:
 - `kReconnectDelayMs`
 - `kReconnectWarmupMs`
 - `kEgtRedThresholdC`
+- `kScreenBrightnessPercent`
+- `kScrollEnabled`
+- `kScrollTextSize`
+- `kScrollStepPx`
+- `kScrollIntervalMs`
+- `kScrollGapPx`
+- `kDataDisplaySleepEnabled`
+- `kDataDisplayBootOnMs`
+- `kDataDisplayWakeOnButtonMs`
+- `kColorHealthy`
+- `kColorWarning`
+- `kColorAlert`
 
 ## 5.2 Simulator Configuration
 
@@ -228,9 +250,35 @@ Expected behavior:
 - `regen > 0` -> `REGEN ON`
 - high EGT -> threshold-driven warning coloring
 
-## 10) LCD Behavior Summary
+## 10) LCD / LED Matrix Behavior
 
-Priority from highest to lowest:
+### 10.1 Traffic-light status colors (always active)
+
+The device always shows a status color, even when data text is asleep.
+
+- `kColorHealthy` (default bright green): connected, no stale data, regen not active
+- `kColorWarning` (default bright yellow): disconnected or stale/lost data
+- `kColorAlert` (default bright red): regen active (`regen_counter > 0`)
+
+Color priority:
+
+1. Red (regen active)
+2. Yellow (connection/stale warning)
+3. Green (healthy)
+
+### 10.2 Data text display and sleep mode
+
+Metric text (scrolling pages such as `SOOT=...`, `DIST=...`, `CNT=...`, `EGT=...`) can auto-sleep to reduce distraction while keeping color status visible.
+
+- On boot, text stays active for `kDataDisplayBootOnMs` (default 3 minutes).
+- After timeout, text turns off (color-only status remains).
+- Press button A to wake text for `kDataDisplayWakeOnButtonMs` (default 5 minutes).
+- While awake, button A still changes page (when not in stale/regen dominant states).
+- Set `kDataDisplaySleepEnabled = false` to keep text always on.
+
+### 10.3 Screen content priority (when text is active)
+
+From highest to lowest:
 
 1. Connection OK splash (short window after connect)
 2. Reconnect screen if disconnected

@@ -2,6 +2,7 @@
 #include <ELMduino.h>
 #include <M5Unified.h>
 #include <NimBLEDevice.h>
+#include <math.h>
 
 #include "obd_config.h"
 #include "simulator_config.h"
@@ -28,6 +29,7 @@ struct RuntimeData {
   uint32_t last_any_data_ms = 0;
   uint32_t last_poll_ms = 0;
   uint32_t last_page_switch_ms = 0;
+  uint32_t data_display_until_ms = 0;
   PageId page = PageId::STATUS;
 
   MetricValue dpf_soot;
@@ -44,6 +46,13 @@ struct SimulatorState {
   float regen_counter = simulator_config::kDefaultRegenCounter;
   float egt = simulator_config::kDefaultEgtC;
 } g_sim;
+
+struct ScrollState {
+  PageId page = PageId::COUNT;
+  String text = "";
+  int16_t x = 0;
+  uint32_t last_step_ms = 0;
+} g_scroll;
 
 class ObdBleBridge {
  public:
@@ -113,6 +122,8 @@ class ObdBleBridge {
     sendAndRead("ATL0");
     sendAndRead("ATS0");
     sendAndRead("ATH0");
+    // Target ECM request header for UDS-style queries (Kia/Hyundai common path).
+    sendAndRead("ATSH7E0");
     return true;
   }
 
@@ -293,6 +304,31 @@ bool isDataStale() {
   return (millis() - g_data.last_any_data_ms) > obd_config::kDataStaleTimeoutMs;
 }
 
+void wakeDataDisplayFor(uint32_t duration_ms) {
+  g_data.data_display_until_ms = millis() + duration_ms;
+}
+
+bool isDataDisplayActive() {
+  if (!obd_config::kDataDisplaySleepEnabled) {
+    return true;
+  }
+  return millis() < g_data.data_display_until_ms;
+}
+
+uint32_t currentStatusColor() {
+  if (isRegenActive()) {
+    return obd_config::kColorAlert;
+  }
+  if (!g_data.is_connected || isDataStale()) {
+    return obd_config::kColorWarning;
+  }
+  return obd_config::kColorHealthy;
+}
+
+void drawColorOnlyStatus(uint32_t background) {
+  M5.Display.fillScreen(background);
+}
+
 void drawScreen(const String& title,
                 const String& value,
                 uint32_t background,
@@ -305,46 +341,126 @@ void drawScreen(const String& title,
   M5.Display.drawString(value, M5.Display.width() / 2, M5.Display.height() / 2);
 }
 
+String buildTickerText(const char* label,
+                       const MetricValue& metric,
+                       const char* unit,
+                       uint8_t decimals) {
+  String value = "--";
+  if (metric.valid && metric.has_numeric) {
+    if (decimals == 0) {
+      value = String(static_cast<int32_t>(lroundf(metric.numeric)));
+    } else {
+      value = String(metric.numeric, decimals);
+    }
+  }
+  String out = String(label) + "=" + value;
+  if (strlen(unit) > 0) {
+    out += unit;
+  }
+  return out;
+}
+
+String tickerTextForPage(PageId page) {
+  switch (page) {
+    case PageId::SOOT:
+      return buildTickerText("SOOT", g_data.dpf_soot, obd_config::kDpfSoot.unit, 1);
+    case PageId::DISTANCE:
+      return buildTickerText("DIST", g_data.distance_since_regen,
+                             obd_config::kDistanceSinceRegen.unit, 1);
+    case PageId::REGEN_COUNT:
+      return buildTickerText("CNT", g_data.regen_counter,
+                             obd_config::kRegenCounter.unit, 0);
+    case PageId::EGT:
+      return buildTickerText("EGT", g_data.egt, obd_config::kEgt.unit, 0);
+    default:
+      break;
+  }
+  return "STATUS=OK";
+}
+
+void drawScrollingMetricPage(PageId page, uint32_t background, uint32_t text = WHITE) {
+  const String ticker = tickerTextForPage(page);
+  M5.Display.fillScreen(background);
+  M5.Display.setTextColor(text, background);
+  const uint8_t text_size =
+      obd_config::kScrollTextSize == 0 ? 1 : obd_config::kScrollTextSize;
+  M5.Display.setTextSize(text_size);
+
+  if (!obd_config::kScrollEnabled) {
+    M5.Display.setTextDatum(middle_center);
+    M5.Display.drawString(ticker, M5.Display.width() / 2, M5.Display.height() / 2);
+    return;
+  }
+
+  M5.Display.setTextDatum(top_left);
+  const uint32_t now = millis();
+  if (g_scroll.page != page || g_scroll.text != ticker) {
+    g_scroll.page = page;
+    g_scroll.text = ticker;
+    g_scroll.x = M5.Display.width();
+    g_scroll.last_step_ms = now;
+  }
+
+  if ((now - g_scroll.last_step_ms) >= obd_config::kScrollIntervalMs) {
+    g_scroll.last_step_ms = now;
+    const int16_t step = obd_config::kScrollStepPx == 0 ? 1 : obd_config::kScrollStepPx;
+    g_scroll.x -= step;
+  }
+
+  const int16_t text_w = M5.Display.textWidth(g_scroll.text);
+  const int16_t reset_threshold =
+      -text_w - static_cast<int16_t>(obd_config::kScrollGapPx);
+  if (g_scroll.x < reset_threshold) {
+    g_scroll.x = M5.Display.width();
+  }
+
+  const int16_t y = (M5.Display.height() - (8 * text_size)) / 2;
+  M5.Display.drawString(g_scroll.text, g_scroll.x, y);
+}
+
 void renderUi() {
+  const uint32_t status_color = currentStatusColor();
+  if (!isDataDisplayActive()) {
+    drawColorOnlyStatus(status_color);
+    return;
+  }
+
   if (g_data.is_connected &&
       (millis() - g_data.connect_success_ms) < obd_config::kScreenDurationMs) {
-    drawScreen("CONN", "OK", GREEN, BLACK);
+    drawScreen("CONN", "OK", status_color, BLACK);
     return;
   }
 
   if (!g_data.is_connected) {
-    drawScreen("BLE", "RECONNECT", ORANGE, BLACK);
+    drawScreen("BLE", "RECONNECT", status_color, BLACK);
     return;
   }
 
   if (isDataStale()) {
-    drawScreen("OBD", "DATA LOST", YELLOW, BLACK);
+    drawScreen("OBD", "DATA LOST", status_color, BLACK);
     return;
   }
 
   if (isRegenActive()) {
-    drawScreen("DPF", "REGEN ON", RED, WHITE);
+    drawScreen("DPF", "REGEN ON", status_color, WHITE);
     return;
   }
 
-  const bool egt_hot = isEgtHigh();
   switch (g_data.page) {
     case PageId::STATUS:
-      drawScreen("STATUS", "OK", egt_hot ? RED : DARKGREEN, WHITE);
+      drawScreen("STATUS", "OK", status_color, BLACK);
       break;
     case PageId::SOOT:
-      drawScreen("SOOT", g_data.dpf_soot.shown, egt_hot ? RED : BLUE, WHITE);
+      drawScrollingMetricPage(PageId::SOOT, status_color, BLACK);
       break;
     case PageId::DISTANCE:
-      drawScreen("DIST", g_data.distance_since_regen.shown,
-                 egt_hot ? RED : CYAN, BLACK);
+      drawScrollingMetricPage(PageId::DISTANCE, status_color, BLACK);
       break;
     case PageId::REGEN_COUNT:
-      drawScreen("COUNT", g_data.regen_counter.shown, egt_hot ? RED : PURPLE,
-                 WHITE);
+      drawScrollingMetricPage(PageId::REGEN_COUNT, status_color, BLACK);
       break;
     case PageId::EGT:
-      drawScreen("EGT", g_data.egt.shown, egt_hot ? RED : MAGENTA, WHITE);
+      drawScrollingMetricPage(PageId::EGT, status_color, BLACK);
       break;
     case PageId::COUNT:
       break;
@@ -357,6 +473,7 @@ void advancePage() {
       (current + 1U) % static_cast<uint8_t>(PageId::COUNT);
   g_data.page = static_cast<PageId>(next);
   g_data.last_page_switch_ms = millis();
+  g_scroll.page = PageId::COUNT;
 }
 
 void pollMetricsIfNeeded() {
@@ -610,6 +727,11 @@ void setup() {
   M5.Display.setRotation(0);
   M5.Display.clear();
   M5.Display.setTextFont(1);
+  const uint8_t clamped_brightness_percent =
+      static_cast<uint8_t>(min<uint8_t>(obd_config::kScreenBrightnessPercent, 100U));
+  const uint8_t brightness_level =
+      static_cast<uint8_t>((static_cast<uint16_t>(clamped_brightness_percent) * 255U) / 100U);
+  M5.Display.setBrightness(brightness_level);
 
   if constexpr (!simulator_config::kEnableSimulator) {
     g_obd.begin();
@@ -617,6 +739,7 @@ void setup() {
     g_sim.connected = simulator_config::kStartConnected;
     Serial.println("Simulator mode enabled.");
   }
+  wakeDataDisplayFor(obd_config::kDataDisplayBootOnMs);
   g_data.last_page_switch_ms = millis();
 }
 
@@ -631,13 +754,15 @@ void loop() {
     pollMetricsIfNeeded();
   }
 
-  if (!isRegenActive() && !isDataStale()) {
-    if (M5.BtnA.wasPressed()) {
-      advancePage();
-    } else if ((millis() - g_data.last_page_switch_ms) >=
-               obd_config::kScreenDurationMs) {
+  if (M5.BtnA.wasPressed()) {
+    wakeDataDisplayFor(obd_config::kDataDisplayWakeOnButtonMs);
+    if (!isRegenActive() && !isDataStale()) {
       advancePage();
     }
+  } else if (isDataDisplayActive() && !isRegenActive() && !isDataStale() &&
+             (millis() - g_data.last_page_switch_ms) >=
+                 obd_config::kScreenDurationMs) {
+    advancePage();
   }
 
   renderUi();
