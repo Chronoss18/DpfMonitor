@@ -22,6 +22,12 @@ This project is provided "as is", without warranty of any kind, express or impli
 
 Important: This is a DIY project. Connecting unauthorized hardware to your vehicle's OBD-II port can be dangerous. Always prioritize road safety and do not operate the device while driving.
 
+By using, modifying, or distributing this project, you acknowledge that you do so entirely at your own risk. You are solely responsible for any commands, configuration values, and usage decisions, as well as compliance with local laws and regulations. The author(s) disclaim all liability for direct or indirect damages, vehicle faults, warranty impacts, or incidents arising from use of this software/hardware.
+
+## Built with AI
+
+This project was developed with the assistance of AI (Cursor and LLM). It is a showcase of how AI can help bridge the gap between automotive diagnostics and DIY hardware (M5Stack). While the logic was AI-assisted, it has been manually configured and tested on a real 2019 Kia Sorento 2.2 CRDi.
+
 ## 1) Features
 
 - BLE OBD connection with reconnect handling
