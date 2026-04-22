@@ -73,8 +73,20 @@ Look up and confirm command + formula + unit for each metric.
 
 ## 6) Final Quick Validation Before Daily Use
 
-- [ ] Device connects and shows `OK` on green for 5 seconds
-- [ ] When `regen_counter > 0`, screen shows red `REGEN ON`
-- [ ] If no fresh data for timeout, `DATA LOST` appears
-- [ ] Button A changes page when not in dominant regen/stale states
-- [ ] EGT page and warning color react with live data
+- [ ] Device connects and enters healthy green state
+- [ ] When `regen_counter > 0`, device shows pulsing red alert state
+- [ ] If no fresh data for timeout, warning yellow with blinking X appears
+- [ ] While disconnected, top-right white heartbeat blink is visible
+- [ ] Warning/alert color behavior reacts with live data
+
+## 7) Optional Vehicle-Specific Trigger Customization
+
+Current firmware default uses `regen_counter > 0` as the primary red-alert trigger.
+
+Because DPF-related signals vary by ECU/vehicle, you can later tune decision rules based on your validated metrics, for example:
+
+- `EGT > 610` as a regen/alert signal
+- `SOOT > 32` as caution or pre-alert threshold
+- Combined conditions (e.g. `regen_counter > 0` OR `EGT > threshold`)
+
+Keep all metric commands and formulas in `include/obd_config.h` accurate first; then tune trigger rules safely with simulator tests before road use.

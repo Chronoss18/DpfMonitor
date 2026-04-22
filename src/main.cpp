@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <ELMduino.h>
+#include <FastLED.h>
 #include <M5Unified.h>
 #include <NimBLEDevice.h>
 #include <math.h>
@@ -10,7 +11,6 @@
 namespace {
 
 enum class ConnectionState { CONNECTING, LIVE, STALE, RECONNECTING };
-enum class PageId { STATUS, SOOT, DISTANCE, REGEN_COUNT, EGT, COUNT };
 
 struct MetricValue {
   String shown = "--";
@@ -22,15 +22,12 @@ struct MetricValue {
 
 struct RuntimeData {
   ConnectionState conn_state = ConnectionState::CONNECTING;
-  bool showed_ok_screen = false;
   bool is_connected = false;
   uint32_t last_connect_attempt_ms = 0;
   uint32_t connect_success_ms = 0;
   uint32_t last_any_data_ms = 0;
   uint32_t last_poll_ms = 0;
-  uint32_t last_page_switch_ms = 0;
   uint32_t data_display_until_ms = 0;
-  PageId page = PageId::STATUS;
 
   MetricValue dpf_soot;
   MetricValue distance_since_regen;
@@ -47,12 +44,11 @@ struct SimulatorState {
   float egt = simulator_config::kDefaultEgtC;
 } g_sim;
 
-struct ScrollState {
-  PageId page = PageId::COUNT;
-  String text = "";
-  int16_t x = 0;
-  uint32_t last_step_ms = 0;
-} g_scroll;
+constexpr uint8_t kMatrixWidth = 5;
+constexpr uint8_t kMatrixHeight = 5;
+constexpr uint8_t kMatrixLedCount = kMatrixWidth * kMatrixHeight;
+constexpr uint8_t kMatrixDataPin = 27;
+CRGB g_matrix_leds[kMatrixLedCount];
 
 class ObdBleBridge {
  public:
@@ -329,151 +325,106 @@ void drawColorOnlyStatus(uint32_t background) {
   M5.Display.fillScreen(background);
 }
 
-void drawScreen(const String& title,
-                const String& value,
-                uint32_t background,
-                uint32_t text = WHITE) {
-  M5.Display.fillScreen(background);
-  M5.Display.setTextColor(text, background);
-  M5.Display.setTextDatum(middle_center);
-  M5.Display.setTextSize(1);
-  M5.Display.drawString(title, M5.Display.width() / 2, 6);
-  M5.Display.drawString(value, M5.Display.width() / 2, M5.Display.height() / 2);
+bool isMatrixDisplay() {
+  return M5.Display.width() <= 8 && M5.Display.height() <= 8;
 }
 
-String buildTickerText(const char* label,
-                       const MetricValue& metric,
-                       const char* unit,
-                       uint8_t decimals) {
-  String value = "--";
-  if (metric.valid && metric.has_numeric) {
-    if (decimals == 0) {
-      value = String(static_cast<int32_t>(lroundf(metric.numeric)));
-    } else {
-      value = String(metric.numeric, decimals);
-    }
-  }
-  String out = String(label) + "=" + value;
-  if (strlen(unit) > 0) {
-    out += unit;
-  }
-  return out;
+CRGB rgb565ToCRGB(uint16_t color) {
+  const uint8_t r = ((color >> 11) & 0x1F) * 255 / 31;
+  const uint8_t g = ((color >> 5) & 0x3F) * 255 / 63;
+  const uint8_t b = (color & 0x1F) * 255 / 31;
+  return CRGB(r, g, b);
 }
 
-String tickerTextForPage(PageId page) {
-  switch (page) {
-    case PageId::SOOT:
-      return buildTickerText("SOOT", g_data.dpf_soot, obd_config::kDpfSoot.unit, 1);
-    case PageId::DISTANCE:
-      return buildTickerText("DIST", g_data.distance_since_regen,
-                             obd_config::kDistanceSinceRegen.unit, 1);
-    case PageId::REGEN_COUNT:
-      return buildTickerText("CNT", g_data.regen_counter,
-                             obd_config::kRegenCounter.unit, 0);
-    case PageId::EGT:
-      return buildTickerText("EGT", g_data.egt, obd_config::kEgt.unit, 0);
-    default:
-      break;
+int16_t matrixIndex(int16_t x, int16_t y) {
+  if (x < 0 || y < 0 || x >= kMatrixWidth || y >= kMatrixHeight) {
+    return -1;
   }
-  return "STATUS=OK";
+  if (y % 2 == 0) {
+    return y * kMatrixWidth + x;
+  }
+  return y * kMatrixWidth + (kMatrixWidth - 1 - x);
 }
 
-void drawScrollingMetricPage(PageId page, uint32_t background, uint32_t text = WHITE) {
-  const String ticker = tickerTextForPage(page);
-  M5.Display.fillScreen(background);
-  M5.Display.setTextColor(text, background);
-  const uint8_t text_size =
-      obd_config::kScrollTextSize == 0 ? 1 : obd_config::kScrollTextSize;
-  M5.Display.setTextSize(text_size);
+void matrixFill(CRGB color) {
+  fill_solid(g_matrix_leds, kMatrixLedCount, color);
+}
 
-  if (!obd_config::kScrollEnabled) {
-    M5.Display.setTextDatum(middle_center);
-    M5.Display.drawString(ticker, M5.Display.width() / 2, M5.Display.height() / 2);
+void matrixDrawPixel(int16_t x, int16_t y, CRGB color) {
+  const int16_t idx = matrixIndex(x, y);
+  if (idx >= 0) {
+    g_matrix_leds[idx] = color;
+  }
+}
+
+void matrixShow() {
+  FastLED.show();
+}
+
+void drawIdleHeartbeatIndicator() {
+  const bool blink_on = ((millis() / 500UL) % 2UL) == 0UL;
+  if (!blink_on) {
     return;
   }
 
-  M5.Display.setTextDatum(top_left);
-  const uint32_t now = millis();
-  if (g_scroll.page != page || g_scroll.text != ticker) {
-    g_scroll.page = page;
-    g_scroll.text = ticker;
-    g_scroll.x = M5.Display.width();
-    g_scroll.last_step_ms = now;
+  if (isMatrixDisplay()) {
+    matrixDrawPixel(kMatrixWidth - 1, 0, CRGB::White);
+    return;
   }
 
-  if ((now - g_scroll.last_step_ms) >= obd_config::kScrollIntervalMs) {
-    g_scroll.last_step_ms = now;
-    const int16_t step = obd_config::kScrollStepPx == 0 ? 1 : obd_config::kScrollStepPx;
-    g_scroll.x -= step;
-  }
-
-  const int16_t text_w = M5.Display.textWidth(g_scroll.text);
-  const int16_t reset_threshold =
-      -text_w - static_cast<int16_t>(obd_config::kScrollGapPx);
-  if (g_scroll.x < reset_threshold) {
-    g_scroll.x = M5.Display.width();
-  }
-
-  const int16_t y = (M5.Display.height() - (8 * text_size)) / 2;
-  M5.Display.drawString(g_scroll.text, g_scroll.x, y);
+  const int16_t x = M5.Display.width() - 4;
+  const int16_t y = 4;
+  M5.Display.fillCircle(x, y, 2, WHITE);
 }
 
-void renderUi() {
-  const uint32_t status_color = currentStatusColor();
+void renderMatrixUi(uint32_t status_color) {
+  matrixFill(rgb565ToCRGB(static_cast<uint16_t>(status_color)));
+
   if (!isDataDisplayActive()) {
-    drawColorOnlyStatus(status_color);
-    return;
-  }
-
-  if (g_data.is_connected &&
-      (millis() - g_data.connect_success_ms) < obd_config::kScreenDurationMs) {
-    drawScreen("CONN", "OK", status_color, BLACK);
+    matrixShow();
     return;
   }
 
   if (!g_data.is_connected) {
-    drawScreen("BLE", "RECONNECT", status_color, BLACK);
+    drawIdleHeartbeatIndicator();
+    matrixShow();
     return;
   }
 
   if (isDataStale()) {
-    drawScreen("OBD", "DATA LOST", status_color, BLACK);
+    const bool blink_on = ((millis() / 250UL) % 2UL) == 0UL;
+    if (blink_on) {
+      for (int16_t i = 0; i < min<int16_t>(kMatrixWidth, kMatrixHeight); ++i) {
+        matrixDrawPixel(i, i, CRGB::Black);
+        matrixDrawPixel((kMatrixWidth - 1) - i, i, CRGB::Black);
+      }
+    }
+    matrixShow();
     return;
   }
 
   if (isRegenActive()) {
-    drawScreen("DPF", "REGEN ON", status_color, WHITE);
+    const bool pulse_on = ((millis() / 300UL) % 2UL) == 0UL;
+    const uint32_t regen_color = pulse_on ? obd_config::kColorAlert : 0x7800;
+    matrixFill(rgb565ToCRGB(static_cast<uint16_t>(regen_color)));
+    matrixShow();
     return;
   }
 
-  switch (g_data.page) {
-    case PageId::STATUS:
-      drawScreen("STATUS", "OK", status_color, BLACK);
-      break;
-    case PageId::SOOT:
-      drawScrollingMetricPage(PageId::SOOT, status_color, BLACK);
-      break;
-    case PageId::DISTANCE:
-      drawScrollingMetricPage(PageId::DISTANCE, status_color, BLACK);
-      break;
-    case PageId::REGEN_COUNT:
-      drawScrollingMetricPage(PageId::REGEN_COUNT, status_color, BLACK);
-      break;
-    case PageId::EGT:
-      drawScrollingMetricPage(PageId::EGT, status_color, BLACK);
-      break;
-    case PageId::COUNT:
-      break;
+  if ((millis() - g_data.connect_success_ms) < obd_config::kScreenDurationMs) {
+    const bool blink_on = ((millis() / 300UL) % 2UL) == 0UL;
+    if (blink_on) {
+      matrixDrawPixel(kMatrixWidth / 2, kMatrixHeight / 2, CRGB::White);
+    }
+    matrixShow();
+    return;
   }
+  matrixShow();
 }
 
-void advancePage() {
-  const uint8_t current = static_cast<uint8_t>(g_data.page);
-  const uint8_t next =
-      (current + 1U) % static_cast<uint8_t>(PageId::COUNT);
-  g_data.page = static_cast<PageId>(next);
-  g_data.last_page_switch_ms = millis();
-  g_scroll.page = PageId::COUNT;
+void renderUi() {
+  const uint32_t status_color = currentStatusColor();
+  renderMatrixUi(status_color);
 }
 
 void pollMetricsIfNeeded() {
@@ -717,21 +668,44 @@ void readSimulatorSerial() {
   handleSimulatorCommand(line);
 }
 
+void runStartupDisplaySelfTest() {
+  const CRGB kTestColors[] = {CRGB::Red, CRGB::Green, CRGB::Blue, CRGB::White, CRGB::Black};
+  for (const CRGB color : kTestColors) {
+    matrixFill(color);
+    matrixShow();
+    delay(220);
+  }
+}
+
+void printStartupDiagnostics(uint8_t brightness_level) {
+  Serial.printf("boot board_id=%d display=%dx%d matrix=%d brightness=%u\n",
+                static_cast<int>(M5.getBoard()),
+                static_cast<int>(M5.Display.width()),
+                static_cast<int>(M5.Display.height()),
+                isMatrixDisplay() ? 1 : 0,
+                static_cast<unsigned>(brightness_level));
+}
+
 }  // namespace
 
 void setup() {
   auto cfg = M5.config();
+  cfg.fallback_board = m5::board_t::board_M5AtomMatrix;
+  cfg.led_brightness = 96;
   M5.begin(cfg);
+  FastLED.addLeds<NEOPIXEL, kMatrixDataPin>(g_matrix_leds, kMatrixLedCount);
+  FastLED.setBrightness(128);
+  matrixFill(CRGB::Black);
+  matrixShow();
   Serial.begin(simulator_config::kSerialBaud);
   Serial.setTimeout(simulator_config::kReadLineTimeoutMs);
-  M5.Display.setRotation(0);
-  M5.Display.clear();
-  M5.Display.setTextFont(1);
   const uint8_t clamped_brightness_percent =
       static_cast<uint8_t>(min<uint8_t>(obd_config::kScreenBrightnessPercent, 100U));
   const uint8_t brightness_level =
       static_cast<uint8_t>((static_cast<uint16_t>(clamped_brightness_percent) * 255U) / 100U);
-  M5.Display.setBrightness(brightness_level);
+  FastLED.setBrightness(brightness_level);
+  printStartupDiagnostics(brightness_level);
+  runStartupDisplaySelfTest();
 
   if constexpr (!simulator_config::kEnableSimulator) {
     g_obd.begin();
@@ -740,7 +714,6 @@ void setup() {
     Serial.println("Simulator mode enabled.");
   }
   wakeDataDisplayFor(obd_config::kDataDisplayBootOnMs);
-  g_data.last_page_switch_ms = millis();
 }
 
 void loop() {
@@ -756,13 +729,6 @@ void loop() {
 
   if (M5.BtnA.wasPressed()) {
     wakeDataDisplayFor(obd_config::kDataDisplayWakeOnButtonMs);
-    if (!isRegenActive() && !isDataStale()) {
-      advancePage();
-    }
-  } else if (isDataDisplayActive() && !isRegenActive() && !isDataStale() &&
-             (millis() - g_data.last_page_switch_ms) >=
-                 obd_config::kScreenDurationMs) {
-    advancePage();
   }
 
   renderUi();

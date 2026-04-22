@@ -7,7 +7,7 @@ namespace simulator_config {
 // Compile-time transport mode.
 // false: use real BLE OBD adapter
 // true: use USB serial simulator commands
-inline constexpr bool kEnableSimulator = true;
+inline constexpr bool kEnableSimulator = false;
 
 // Firmware serial channel settings (device side).
 inline constexpr uint32_t kSerialBaud = 115200;

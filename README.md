@@ -1,11 +1,11 @@
 # Regen_Check
 
-DPF monitoring firmware for M5Stack Atom that supports:
+DPF monitoring firmware for M5Stack Atom Matrix (ESP32-PICO-D4) that supports:
 
 - Real vehicle mode via BLE OBD adapter
 - Bench simulation mode via USB serial + PC console app
 
-The LCD UI shows connection state, DPF regen state, stale data warnings, and metric pages (soot, distance since regen, regen counter, EGT).
+The device uses 5x5 LED matrix status signaling only (no text UI).
 
 ## Open-Source Meta
 
@@ -31,10 +31,10 @@ This project was developed with the assistance of AI (Cursor and LLM). It is a s
 ## 1) Features
 
 - BLE OBD connection with reconnect handling
-- Data stale detection (`DATA LOST`)
-- Regen-dominant warning screen (`REGEN ON` when regen counter > 0)
-- EGT threshold highlighting
-- Manual page switching via button A (when not stale/regen-dominant)
+- LED-only status behavior (green/yellow/red with simple blink patterns)
+- Data stale detection
+- Regen-dominant alert behavior (when regen counter > 0)
+- Idle heartbeat pixel while disconnected
 - PC simulation via command-based serial protocol
 
 ## 2) Project Structure
@@ -51,7 +51,7 @@ This project was developed with the assistance of AI (Cursor and LLM). It is a s
 
 ### Firmware / Device
 
-- M5Stack Atom (configured in `platformio.ini` as `m5stack-atom`)
+- M5Stack Atom Matrix (ESP32-PICO-D4, configured in `platformio.ini` as `m5stack-atom`)
 - USB cable
 - PlatformIO CLI (or PlatformIO in VS Code/Cursor)
 
@@ -141,6 +141,27 @@ Notes:
 - If you refer to them as "DATA_ID", treat that as the UDS DID encoded in the command field.
 - Current parser expects numeric-first replies; keep command/adapter formatting aligned with parser behavior.
 
+### Why metrics are still kept in LED-only firmware
+
+Even without text rendering, these metrics are intentionally kept because they are common DPF-related signals:
+
+- `kRegenCounter` (regen activity/state)
+- `kEgt` (exhaust gas temperature trend during regen)
+- `kDpfSoot` (loading estimate)
+- `kDistanceSinceRegen` (interval context)
+
+Current default decision rule is simple and conservative:
+
+- if `regen_counter > 0`, the device enters red alert behavior.
+
+This is only a default strategy. Different cars expose different semantics and ranges, so users may choose a vehicle-specific rule set later, for example:
+
+- `EGT > 610` as regen/alert signal
+- `SOOT > 32` as caution threshold
+- combined logic (e.g. `regen_counter > 0` OR `EGT > threshold`)
+
+Keeping all four metrics in config allows this customization without changing BLE transport wiring or overall firmware flow.
+
 ### Runtime timing and thresholds
 
 - `kScreenDurationMs`
@@ -150,11 +171,6 @@ Notes:
 - `kReconnectWarmupMs`
 - `kEgtRedThresholdC`
 - `kScreenBrightnessPercent`
-- `kScrollEnabled`
-- `kScrollTextSize`
-- `kScrollStepPx`
-- `kScrollIntervalMs`
-- `kScrollGapPx`
 - `kDataDisplaySleepEnabled`
 - `kDataDisplayBootOnMs`
 - `kDataDisplayWakeOnButtonMs`
@@ -198,7 +214,7 @@ Workflow:
 2. Fill required values in `include/obd_config.h` (name/MAC, UUIDs, metric commands)
 3. Build + upload
 4. Power adapter + device
-5. Check LCD/serial logs for connect/reconnect and live metric behavior
+5. Check LED matrix + serial logs for connect/reconnect and live behavior
 
 ## 8) Simulator Mode Workflow
 
@@ -212,7 +228,7 @@ python tools/obd_sim_console.py --port COM5 --baud 115200
 ```
 
 4. Send simulator commands from REPL
-5. Observe LCD behavior
+5. Observe LED matrix behavior
 
 One-shot sequence mode:
 
@@ -250,47 +266,22 @@ disconnect
 
 Expected behavior:
 
-- `connect` -> connection screen then live pages
-- `disconnect` -> reconnect screen
-- `drop 6000` -> eventually `DATA LOST`
-- `regen > 0` -> `REGEN ON`
-- high EGT -> threshold-driven warning coloring
+- `connect` -> healthy status (green), short center white blink on initial connect
+- `disconnect` -> warning status (yellow) + top-right white heartbeat blink
+- `drop 6000` -> warning status + stale blink pattern (yellow with blinking X)
+- `regen > 0` -> pulsing red alert
+- high EGT -> contributes to stale/alert state behavior via metric updates
 
-## 10) LCD / LED Matrix Behavior
+## 10) LED Matrix Behavior (Current Firmware)
 
-### 10.1 Traffic-light status colors (always active)
+The firmware is intentionally LED-only for Atom Matrix.
 
-The device always shows a status color, even when data text is asleep.
-
-- `kColorHealthy` (default bright green): connected, no stale data, regen not active
-- `kColorWarning` (default bright yellow): disconnected or stale/lost data
-- `kColorAlert` (default bright red): regen active (`regen_counter > 0`)
-
-Color priority:
-
-1. Red (regen active)
-2. Yellow (connection/stale warning)
-3. Green (healthy)
-
-### 10.2 Data text display and sleep mode
-
-Metric text (scrolling pages such as `SOOT=...`, `DIST=...`, `CNT=...`, `EGT=...`) can auto-sleep to reduce distraction while keeping color status visible.
-
-- On boot, text stays active for `kDataDisplayBootOnMs` (default 3 minutes).
-- After timeout, text turns off (color-only status remains).
-- Press button A to wake text for `kDataDisplayWakeOnButtonMs` (default 5 minutes).
-- While awake, button A still changes page (when not in stale/regen dominant states).
-- Set `kDataDisplaySleepEnabled = false` to keep text always on.
-
-### 10.3 Screen content priority (when text is active)
-
-From highest to lowest:
-
-1. Connection OK splash (short window after connect)
-2. Reconnect screen if disconnected
-3. Data stale warning (`DATA LOST`)
-4. Regen active warning (`REGEN ON`)
-5. Normal pages: STATUS, SOOT, DIST, COUNT, EGT
+- Healthy connected state: solid `kColorHealthy` (default bright green)
+- Warning state (disconnected or stale): `kColorWarning` (default bright yellow)
+- Alert state (regen active): pulsing `kColorAlert` (default bright red)
+- Idle live heartbeat: blinking white top-right pixel while disconnected
+- Recent connect indicator: blinking white center pixel during connect splash window
+- Stale indicator: blinking X pattern overlay
 
 ## 11) Troubleshooting
 
@@ -312,7 +303,7 @@ From highest to lowest:
 - Verify UUIDs (`kBleServiceUuid`, `kBleTxCharUuid`, `kBleRxCharUuid`)
 - Ensure adapter is advertising and not connected to another host
 
-### Metrics always `--`
+### Metrics not affecting expected colors
 
 - Placeholder commands still present in `include/obd_config.h`
 - Adapter response format not parseable as numeric-first token

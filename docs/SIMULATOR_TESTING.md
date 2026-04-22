@@ -51,18 +51,18 @@ Useful options:
 ### Connection
 
 1. `connect`
-2. Expect `CONN OK` screen for startup duration.
+2. Expect healthy green state and short center white blink.
 
 ### Disconnection
 
 1. `disconnect`
-2. Expect reconnect screen (`BLE RECONNECT`).
+2. Expect warning yellow state with top-right white heartbeat blink.
 
 ### Connection Drop + Reconnect
 
 1. `connect`
 2. `drop 6000`
-3. Wait for stale timeout; expect `OBD DATA LOST`.
+3. Wait for stale timeout; expect warning yellow with blinking X pattern.
 4. After drop expires or after sending metric commands, data should recover.
 
 ### Fake EGT/DPF
@@ -71,14 +71,14 @@ Useful options:
 2. `egt 450`
 3. `soot 9.5`
 4. `dist 120`
-5. Verify values/pages on LCD.
+5. Verify device remains in healthy/warning behavior as expected.
 
 ### Fake Active Regeneration
 
 1. `regen 2`
-2. Expect `DPF REGEN ON`.
+2. Expect pulsing red alert state.
 3. `regen 0`
-4. Screen returns to normal page behavior.
+4. Device returns to normal connected state behavior.
 
 ## 6) Return To Production Mode
 
